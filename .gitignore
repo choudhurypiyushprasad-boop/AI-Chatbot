@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+chatbot/
+venv/
+.env
+
+# VS Code
+.vscode/
+
+# Chroma Vector Database
+vector_store/
+
+# Python cache
+.pytest_cache/
+
+# OS Files
+.DS_Store
+Thumbs.db
