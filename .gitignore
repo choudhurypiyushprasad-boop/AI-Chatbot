@@ -18,6 +18,9 @@ vector_store/
 # Python cache
 .pytest_cache/
 
+# Temporary files
+*.txt.txt
+
 # OS Files
 .DS_Store
 Thumbs.db
