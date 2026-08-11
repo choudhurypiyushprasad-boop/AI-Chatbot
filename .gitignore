@@ -24,3 +24,6 @@ vector_store/
 # OS Files
 .DS_Store
 Thumbs.db
+
+# Multimodal test images
+multimodal/test_images/*
