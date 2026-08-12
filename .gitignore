@@ -27,3 +27,12 @@ Thumbs.db
 
 # Multimodal test images
 multimodal/test_images/*
+
+# MedQuAD dataset
+MedQuAD/
+
+# Medical vector database
+medical_vector_store/
+
+# Temporary files
+sample.txt
