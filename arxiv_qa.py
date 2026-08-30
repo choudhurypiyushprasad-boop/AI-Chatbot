@@ -5,7 +5,8 @@ from pathlib import Path
 import chromadb
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
-import google.generativeai as genai
+from transformers import pipeline
+from google import genai
 
 
 # ============================================================
@@ -26,33 +27,44 @@ TOP_K = 5
 
 
 # ============================================================
-# LOAD ENVIRONMENT VARIABLES
+# ENVIRONMENT
 # ============================================================
 
 load_dotenv(BASE_DIR / ".env")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-
 if not GEMINI_API_KEY:
     raise ValueError(
-        "GEMINI_API_KEY was not found.\n"
-        "Make sure your .env file contains:\n\n"
-        "GEMINI_API_KEY=your_api_key_here"
+        "GEMINI_API_KEY was not found in .env"
     )
 
 
 # ============================================================
-# GEMINI CONFIGURATION
+# GEMINI CLIENT
 # ============================================================
 
-genai.configure(
+print("🤖 Initializing Gemini client...")
+
+client = genai.Client(
     api_key=GEMINI_API_KEY
 )
 
 
 # ============================================================
-# LOAD EMBEDDING MODEL
+# SENTIMENT MODEL
+# ============================================================
+
+print("🧠 Loading sentiment analysis model...")
+
+sentiment_model = pipeline(
+    "sentiment-analysis",
+    model="cardiffnlp/twitter-roberta-base-sentiment-latest"
+)
+
+
+# ============================================================
+# EMBEDDING MODEL
 # ============================================================
 
 print("🧠 Loading embedding model...")
@@ -60,6 +72,69 @@ print("🧠 Loading embedding model...")
 embedding_model = SentenceTransformer(
     "sentence-transformers/all-MiniLM-L6-v2"
 )
+
+
+# ============================================================
+# SENTIMENT ANALYSIS
+# ============================================================
+
+def analyze_sentiment(text):
+
+    result = sentiment_model(
+        text,
+        truncation=True
+    )[0]
+
+    label = result["label"].lower()
+    confidence = float(result["score"])
+
+    if label == "positive":
+        sentiment = "positive"
+
+    elif label == "negative":
+        sentiment = "negative"
+
+    else:
+        sentiment = "neutral"
+
+    return sentiment, confidence
+
+
+# ============================================================
+# SENTIMENT RESPONSE INSTRUCTIONS
+# ============================================================
+
+def get_sentiment_instruction(sentiment):
+
+    if sentiment == "positive":
+
+        return """
+The user has a positive sentiment.
+
+Respond in a friendly, warm, and encouraging way.
+You may acknowledge their positive feedback briefly.
+Do not become excessively enthusiastic or distract
+from the user's actual question.
+"""
+
+    elif sentiment == "negative":
+
+        return """
+The user has a negative or frustrated sentiment.
+
+Respond calmly and empathetically.
+Acknowledge the user's concern when appropriate.
+Do not sound defensive, dismissive, or overly cheerful.
+If the user reports an error or incorrect answer,
+focus on correcting the problem.
+"""
+
+    return """
+The user's sentiment is neutral.
+
+Respond clearly, professionally, and directly.
+Do not add unnecessary emotional language.
+"""
 
 
 # ============================================================
@@ -97,11 +172,11 @@ def create_database(papers):
 
     print("💾 Creating ChromaDB...")
 
-    client = chromadb.PersistentClient(
+    client_db = chromadb.PersistentClient(
         path=VECTOR_STORE
     )
 
-    collection = client.get_or_create_collection(
+    collection = client_db.get_or_create_collection(
         name=COLLECTION_NAME
     )
 
@@ -124,15 +199,8 @@ def create_database(papers):
 
     for index, paper in enumerate(papers):
 
-        title = paper.get(
-            "title",
-            ""
-        )
-
-        abstract = paper.get(
-            "abstract",
-            ""
-        )
+        title = paper.get("title", "")
+        abstract = paper.get("abstract", "")
 
         document = (
             f"Title: {title}\n\n"
@@ -145,38 +213,23 @@ def create_database(papers):
             f"paper_{index}"
         )
 
-        authors = paper.get(
-            "authors",
-            []
-        )
-
-        categories = paper.get(
-            "categories",
-            []
-        )
-
         metadatas.append(
             {
                 "title": title,
-
                 "authors": ", ".join(
-                    authors
+                    paper.get("authors", [])
                 ),
-
                 "categories": ", ".join(
-                    categories
+                    paper.get("categories", [])
                 ),
-
                 "published": paper.get(
                     "published",
                     ""
                 ),
-
                 "arxiv_id": paper.get(
                     "id",
                     ""
                 ),
-
                 "arxiv_url": paper.get(
                     "url",
                     ""
@@ -188,8 +241,6 @@ def create_database(papers):
         documents,
         show_progress_bar=True
     )
-
-    print("💾 Storing papers in ChromaDB...")
 
     collection.add(
         ids=ids,
@@ -230,7 +281,7 @@ def search_papers(
 
 
 # ============================================================
-# BUILD RESEARCH CONTEXT
+# BUILD CONTEXT
 # ============================================================
 
 def build_context(results):
@@ -256,9 +307,7 @@ def build_context(results):
 
     context_parts = []
 
-    for index, document in enumerate(
-        documents
-    ):
+    for index, document in enumerate(documents):
 
         metadata = (
             metadatas[index]
@@ -272,48 +321,24 @@ def build_context(results):
             else None
         )
 
-        title = metadata.get(
-            "title",
-            "Unknown"
-        )
-
-        authors = metadata.get(
-            "authors",
-            "Unknown"
-        )
-
-        categories = metadata.get(
-            "categories",
-            "Unknown"
-        )
-
-        published = metadata.get(
-            "published",
-            "Unknown"
-        )
-
-        arxiv_id = metadata.get(
-            "arxiv_id",
-            "Unknown"
-        )
-
-        section = f"""
+        context_parts.append(
+            f"""
 PAPER {index + 1}
 
 Title:
-{title}
+{metadata.get("title", "Unknown")}
 
 Authors:
-{authors}
+{metadata.get("authors", "Unknown")}
 
 Categories:
-{categories}
+{metadata.get("categories", "Unknown")}
 
 Published:
-{published}
+{metadata.get("published", "Unknown")}
 
 arXiv ID:
-{arxiv_id}
+{metadata.get("arxiv_id", "Unknown")}
 
 Retrieval Distance:
 {distance}
@@ -321,14 +346,9 @@ Retrieval Distance:
 Research Content:
 {document}
 """
-
-        context_parts.append(
-            section
         )
 
-    return "\n".join(
-        context_parts
-    )
+    return "\n".join(context_parts)
 
 
 # ============================================================
@@ -337,7 +357,8 @@ Research Content:
 
 def generate_research_answer(
     question,
-    collection
+    collection,
+    sentiment
 ):
 
     results = search_papers(
@@ -346,50 +367,50 @@ def generate_research_answer(
         top_k=TOP_K
     )
 
-    context = build_context(
-        results
+    context = build_context(results)
+
+    sentiment_instruction = get_sentiment_instruction(
+        sentiment
     )
 
     prompt = f"""
-You are an AI research assistant
-specialized in Computer Science.
+You are an AI research assistant specialized
+in Computer Science.
 
-Answer the user's question using the
-research papers retrieved from the arXiv
-knowledge base.
+{sentiment_instruction}
+
+Answer the user's question using the research
+papers retrieved from the arXiv knowledge base.
 
 IMPORTANT RULES:
 
-1. Base your answer primarily on the
-   provided research context.
+1. Base factual research claims primarily on
+   the provided research context.
 
-2. Do not invent facts, results,
-   experiments, authors, or citations.
+2. Do not invent facts, results, experiments,
+   authors, or citations.
 
-3. If the retrieved papers do not contain
-   enough information to answer something,
-   clearly say that the available papers
-   do not provide enough evidence.
+3. If the papers do not contain enough
+   information, clearly say so.
 
 4. Explain technical concepts clearly.
 
-5. When useful, compare approaches
-   between papers.
+5. When useful, compare approaches between papers.
 
-6. Mention relevant paper titles when
-   making claims.
+6. Mention relevant paper titles when making
+   research claims.
 
-7. Give a concise but useful answer.
+7. Distinguish evidence from interpretation.
 
-8. Distinguish evidence from your own
-   interpretation.
+8. Do not claim that a paper proves something
+   unless the provided context supports it.
 
-9. Do not claim that a paper proves
-   something unless the provided research
-   context supports that claim.
+9. Use Markdown headings and bullet points
+   where appropriate.
 
-10. Use Markdown headings and bullet
-    points where appropriate.
+10. Keep the response proportional to the user's
+    question. Do not produce a long research
+    report for a simple conversational message.
 
 RETRIEVED RESEARCH
 ==================
@@ -401,19 +422,15 @@ USER QUESTION
 
 {question}
 
-Now provide the research-based answer.
+Detected sentiment:
+{sentiment}
+
+Now provide the best response.
 """
 
-    # --------------------------------------------------------
-    # Gemini model
-    # --------------------------------------------------------
-
-    model = genai.GenerativeModel(
-        "gemini-3.6-flash"
-    )
-
-    response = model.generate_content(
-        prompt
+    response = client.models.generate_content(
+        model="gemini-3.6-flash",
+        contents=prompt
     )
 
     return response.text, results
@@ -436,7 +453,6 @@ def display_sources(results):
     )[0]
 
     if not metadatas:
-
         return
 
     print()
@@ -444,9 +460,7 @@ def display_sources(results):
     print("📚 SOURCES USED")
     print("=" * 60)
 
-    for index, metadata in enumerate(
-        metadatas
-    ):
+    for index, metadata in enumerate(metadatas):
 
         print()
         print(
@@ -474,13 +488,6 @@ def display_sources(results):
             f"{metadata.get('arxiv_id', 'Unknown')}"
         )
 
-        if metadata.get("arxiv_url"):
-
-            print(
-                f"   URL: "
-                f"{metadata.get('arxiv_url')}"
-            )
-
         if index < len(distances):
 
             print(
@@ -501,10 +508,6 @@ def main():
 
     print()
 
-    print(
-        "📚 Loading research knowledge base..."
-    )
-
     papers = load_papers()
 
     collection = create_database(
@@ -512,25 +515,18 @@ def main():
     )
 
     print()
-
     print(
         f"📊 Papers available: "
         f"{collection.count()}"
     )
 
     print()
-
     print(
         "Ask a question about the research."
     )
-
     print(
         "Type 'exit' to quit."
     )
-
-    # ========================================================
-    # CONTINUOUS QUESTION LOOP
-    # ========================================================
 
     while True:
 
@@ -543,7 +539,6 @@ def main():
             print(
                 "⚠️ Please enter a question."
             )
-
             continue
 
         if question.lower() in {
@@ -555,22 +550,143 @@ def main():
             print(
                 "\n👋 Exiting research assistant."
             )
-
             break
 
-        print()
-
-        print(
-            "🧠 Retrieving research and "
-            "generating answer..."
-        )
-
         try:
+
+            # ------------------------------------------------
+            # SENTIMENT
+            # ------------------------------------------------
+
+            print()
+            print(
+                "🧠 Analyzing sentiment..."
+            )
+
+            sentiment, confidence = analyze_sentiment(
+                question
+            )
+
+            emoji = {
+                "positive": "😊",
+                "negative": "😟",
+                "neutral": "😐"
+            }.get(
+                sentiment,
+                "😐"
+            )
+
+            print()
+            print("=" * 60)
+            print("😊 SENTIMENT ANALYSIS")
+            print("-" * 60)
+
+            print(
+                f"Sentiment: {emoji} {sentiment}"
+            )
+
+            print(
+                f"Confidence: "
+                f"{confidence * 100:.2f}%"
+            )
+
+            # ------------------------------------------------
+            # RESEARCH / CONVERSATIONAL DETECTION
+            # ------------------------------------------------
+
+            research_keywords = [
+                "paper",
+                "papers",
+                "research",
+                "arxiv",
+                "model",
+                "models",
+                "algorithm",
+                "algorithms",
+                "transformer",
+                "transformers",
+                "machine learning",
+                "deep learning",
+                "neural network",
+                "neural networks",
+                "vision",
+                "llm",
+                "llms",
+                "retrieval",
+                "rag",
+                "dataset",
+                "datasets",
+                "accuracy",
+                "architecture",
+                "inference",
+                "training"
+            ]
+
+            is_research_question = any(
+                keyword in question.lower()
+                for keyword in research_keywords
+            )
+
+            # ------------------------------------------------
+            # CONVERSATIONAL MESSAGE
+            # ------------------------------------------------
+
+            if not is_research_question:
+
+                sentiment_instruction = (
+                    get_sentiment_instruction(
+                        sentiment
+                    )
+                )
+
+                prompt = f"""
+You are a friendly AI assistant.
+
+{sentiment_instruction}
+
+Respond naturally to the user's message.
+
+Do not retrieve or discuss research papers
+unless the user asks about research.
+
+USER MESSAGE:
+{question}
+"""
+
+                print()
+                print(
+                    "💬 Conversational message detected."
+                )
+
+                response = client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=prompt
+                )
+
+                print()
+                print("=" * 60)
+                print("💡 ASSISTANT RESPONSE")
+                print("=" * 60)
+                print()
+                print(response.text)
+
+                continue
+
+            # ------------------------------------------------
+            # RESEARCH QUESTION
+            # ------------------------------------------------
+
+            print()
+            print(
+                "🧠 Retrieving research and "
+                "generating answer..."
+            )
 
             answer, results = (
                 generate_research_answer(
                     question,
-                    collection
+                    collection,
+                    sentiment
                 )
             )
 
@@ -578,7 +694,6 @@ def main():
             print("=" * 60)
             print("💡 RESEARCH ANSWER")
             print("=" * 60)
-
             print()
             print(answer)
 
@@ -590,9 +705,8 @@ def main():
 
             print()
             print(
-                "❌ Error generating answer:"
+                "❌ Error:"
             )
-
             print(e)
 
 
@@ -601,5 +715,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
