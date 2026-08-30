@@ -36,3 +36,9 @@ medical_vector_store/
 
 # Temporary files
 sample.txtarxiv_vector_store/
+
+.env
+__pycache__/
+*.pyc
+arxiv_vector_store/
+vector_store/
